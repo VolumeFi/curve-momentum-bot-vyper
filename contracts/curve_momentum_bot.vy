@@ -142,7 +142,7 @@ def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, expe
     deposit: Deposit = Deposit({
         route: empty(address[9]),
         swap_params: empty(uint256[3][4]),
-        amount: empty(uint256),
+        amount: amount1,
         pools: empty(address[4]),
         depositor: msg.sender
     })
