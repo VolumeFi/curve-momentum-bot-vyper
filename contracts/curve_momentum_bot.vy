@@ -1,10 +1,11 @@
-# @version 0.3.7
-
+#pragma version 0.3.10
+#pragma optimize gas
+#pragma evm-version shanghai
 struct Deposit:
-    route: address[9]
-    swap_params: uint256[3][4]
+    route: address[11]
+    swap_params: uint256[5][5]
     amount: uint256
-    pools: address[4]
+    pools: address[5]
     depositor: address
 
 enum WithdrawType:
@@ -14,19 +15,15 @@ enum WithdrawType:
 
 interface ERC20:
     def balanceOf(_owner: address) -> uint256: view
+    def approve(_spender: address, _value: uint256) -> bool: nonpayable
+    def transfer(_to: address, _value: uint256) -> bool: nonpayable
+    def transferFrom(_from: address, _to: address, _value: uint256) -> bool: nonpayable
 
 interface WrappedEth:
     def deposit(): payable
 
 interface CurveSwapRouter:
-    def exchange_multiple(
-        _route: address[9],
-        _swap_params: uint256[3][4],
-        _amount: uint256,
-        _expected: uint256,
-        _pools: address[4]=[ZERO_ADDRESS, ZERO_ADDRESS, ZERO_ADDRESS, ZERO_ADDRESS],
-        _receiver: address=msg.sender
-    ) -> uint256: payable
+    def exchange(_route: address[11], _swap_params: uint256[5][5], _amount: uint256, _expected: uint256, _pools: address[5], _receiver: address) -> uint256: payable
 
 event Deposited:
     deposit_id: uint256
@@ -94,40 +91,10 @@ def __init__(_compass: address, _router: address, _refund_wallet: address, _fee:
     log UpdateServiceFeeCollector(empty(address), _service_fee_collector)
     log UpdateServiceFee(0, _service_fee)
 
-@internal
-def _safe_approve(_token: address, _to: address, _value: uint256):
-    _response: Bytes[32] = raw_call(
-        _token,
-        _abi_encode(_to, _value, method_id=method_id("approve(address,uint256)")),
-        max_outsize=32
-    )  # dev: failed approve
-    if len(_response) > 0:
-        assert convert(_response, bool) # dev: failed approve
-
-@internal
-def _safe_transfer(_token: address, _to: address, _value: uint256):
-    _response: Bytes[32] = raw_call(
-        _token,
-        _abi_encode(_to, _value, method_id=method_id("transfer(address,uint256)")),
-        max_outsize=32
-    )  # dev: failed transfer
-    if len(_response) > 0:
-        assert convert(_response, bool) # dev: failed transfer
-
-@internal
-def _safe_transfer_from(_token: address, _from: address, _to: address, _value: uint256):
-    _response: Bytes[32] = raw_call(
-        _token,
-        _abi_encode(_from, _to, _value, method_id=method_id("transferFrom(address,address,uint256)")),
-        max_outsize=32
-    )  # dev: failed transferFrom
-    if len(_response) > 0:
-        assert convert(_response, bool) # dev: failed transferFrom
-
 @external
 @payable
 @nonreentrant("lock")
-def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, expected: uint256, pools: address[4], profit_taking: uint256, stop_loss: uint256):
+def deposit(route: address[11], swap_params: uint256[5][5], amount: uint256, expected: uint256, pools: address[5], profit_taking: uint256, stop_loss: uint256):
     _value: uint256 = msg.value
     assert self.paloma != empty(bytes32), "Paloma not set"
     _fee: uint256 = self.fee
@@ -141,33 +108,35 @@ def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, expe
         assert _value >= amount, "Insufficient deposit"
         if _value > amount:
             send(msg.sender, unsafe_sub(_value, amount))
-        amount1 = CurveSwapRouter(ROUTER).exchange_multiple(route, swap_params, amount, expected, pools, self, value=amount)
+        amount1 = CurveSwapRouter(ROUTER).exchange(route, swap_params, amount, expected, pools, self, value=amount)
     else:
         if _value > 0:
             send(msg.sender, _value)
-        self._safe_transfer_from(token0, msg.sender, self, amount)
-        self._safe_approve(token0, ROUTER, amount)
-        amount1 = CurveSwapRouter(ROUTER).exchange_multiple(route, swap_params, amount, expected, pools, self)
+        assert ERC20(token0).transferFrom(msg.sender, self, amount, default_return_value=True), "TF fail"
+        assert ERC20(token0).approve(ROUTER, amount, default_return_value=True), "Ap fail"
+        amount1 = CurveSwapRouter(ROUTER).exchange(route, swap_params, amount, expected, pools, self)
     assert amount1 > 0, "Insufficient deposit"
     deposit: Deposit = Deposit({
-        route: empty(address[9]),
-        swap_params: empty(uint256[3][4]),
+        route: empty(address[11]),
+        swap_params: empty(uint256[5][5]),
         amount: amount1,
-        pools: empty(address[4]),
+        pools: empty(address[5]),
         depositor: msg.sender
     })
     j: uint256 = 0
-    for i in range(4):
-        if route[unsafe_sub(8, unsafe_mul(i, 2))] == empty(address):
+    for i in range(5):
+        if route[unsafe_sub(10, unsafe_add(i, i))] == empty(address):
             continue
         if j == 0:
-            deposit.route[0] = route[unsafe_sub(8, unsafe_mul(i, 2))]
-        deposit.route[unsafe_add(unsafe_mul(j, 2), 1)] = route[unsafe_sub(7, unsafe_mul(i, 2))]
-        deposit.route[unsafe_add(unsafe_mul(j, 2), 2)] = route[unsafe_sub(6, unsafe_mul(i, 2))]
-        deposit.swap_params[j][0] = swap_params[unsafe_sub(3, i)][1]
-        deposit.swap_params[j][1] = swap_params[unsafe_sub(3, i)][0]
-        deposit.swap_params[j][2] = swap_params[unsafe_sub(3, i)][2]
-        deposit.pools[j] = pools[unsafe_sub(3, i)]
+            deposit.route[0] = route[unsafe_sub(10, unsafe_add(i, i))]
+        deposit.route[unsafe_add(unsafe_add(j, j), 1)] = route[unsafe_sub(9, unsafe_add(i, i))]
+        deposit.route[unsafe_add(unsafe_add(j, j), 2)] = route[unsafe_sub(8, unsafe_add(i, i))]
+        deposit.swap_params[j][0] = swap_params[unsafe_sub(4, i)][1]
+        deposit.swap_params[j][1] = swap_params[unsafe_sub(4, i)][0]
+        deposit.swap_params[j][2] = swap_params[unsafe_sub(4, i)][2]
+        deposit.swap_params[j][3] = swap_params[unsafe_sub(4, i)][3]
+        deposit.swap_params[j][4] = swap_params[unsafe_sub(4, i)][4]
+        deposit.pools[j] = pools[unsafe_sub(4, i)]
         j = unsafe_add(j, 1)
     deposit_id: uint256 = self.deposit_size
     self.deposits[deposit_id] = deposit
@@ -181,32 +150,32 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
     if withdraw_type == WithdrawType.CANCEL:
         assert msg.sender == deposit.depositor, "Unauthorized"
     self.deposits[deposit_id] = Deposit({
-        route: empty(address[9]),
-        swap_params: empty(uint256[3][4]),
+        route: empty(address[11]),
+        swap_params: empty(uint256[5][5]),
         amount: empty(uint256),
-        pools: empty(address[4]),
+        pools: empty(address[5]),
         depositor: msg.sender
     })
     assert deposit.amount > 0, "Empty deposit"
     last_token: address = empty(address)
-    for i in range(4):
-        last_token = deposit.route[unsafe_sub(8, unsafe_add(i, i))]
+    for i in range(5):
+        last_token = deposit.route[unsafe_sub(10, unsafe_add(i, i))]
         if last_token != empty(address):
             break
     amount0: uint256 = 0
     service_fee_amount: uint256 = 0
     _service_fee: uint256 = self.service_fee
     if deposit.route[0] == VETH:
-        amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self, value=deposit.amount)
+        amount0 = CurveSwapRouter(ROUTER).exchange(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self, value=deposit.amount)
         if _service_fee > 0:
             service_fee_amount = unsafe_div(amount0 * _service_fee, DENOMINATOR)
         actual_amount: uint256 = unsafe_sub(amount0, service_fee_amount)
-        self._safe_transfer(last_token, deposit.depositor, actual_amount)
+        assert ERC20(last_token).transfer(deposit.depositor, actual_amount, default_return_value=True), "Tr fail"
         if service_fee_amount > 0:
-            self._safe_transfer(last_token, self.service_fee_collector, service_fee_amount)
+            assert ERC20(last_token).transfer(self.service_fee_collector, service_fee_amount, default_return_value=True), "Tr fail"
     else:
-        self._safe_approve(deposit.route[0], ROUTER, deposit.amount)
-        amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
+        assert ERC20(deposit.route[0]).approve(ROUTER, deposit.amount, default_return_value=True), "Ap fail"
+        amount0 = CurveSwapRouter(ROUTER).exchange(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
         if _service_fee > 0:
             service_fee_amount = unsafe_div(amount0 * _service_fee, DENOMINATOR)
         actual_amount: uint256 = unsafe_sub(amount0, service_fee_amount)
@@ -215,9 +184,9 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
             if service_fee_amount > 0:
                 send(self.service_fee_collector, service_fee_amount)
         else:
-            self._safe_transfer(last_token, deposit.depositor, actual_amount)
+            assert ERC20(last_token).transfer(deposit.depositor, actual_amount, default_return_value=True), "Tr fail"
             if service_fee_amount > 0:
-                self._safe_transfer(last_token, self.service_fee_collector, service_fee_amount)
+                assert ERC20(last_token).transfer(self.service_fee_collector, service_fee_amount, default_return_value=True), "Tr fail"
     log Withdrawn(deposit_id, msg.sender, withdraw_type, amount0)
     return amount0
 
